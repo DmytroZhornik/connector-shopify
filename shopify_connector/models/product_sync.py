@@ -593,6 +593,8 @@ class ShopifyProductTemplateSync(models.Model):
             "company_id": instance.company_id.id,
             "description_sale": product["description"],
             "active": product["status"] != "ARCHIVED",
+            "type": "consu",
+            "is_storable": True,
         }
         if product["variants"]:
             values["list_price"] = self._shopify_amount_to_company(
