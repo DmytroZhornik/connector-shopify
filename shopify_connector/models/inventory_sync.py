@@ -319,7 +319,7 @@ class ShopifyProductVariantInventorySync(models.Model):
 
     def _odoo_inventory_quantity(self, location_binding, *, apply_export_policy=True):
         self.ensure_one()
-        product = self.odoo_id.with_company(self.instance_id.company_id).with_context(
+        product = (self.stock_product_id or self.odoo_id).with_company(self.instance_id.company_id).with_context(
             location=location_binding.odoo_location_id.id
         )
         quantity = quantity_for_basis(
