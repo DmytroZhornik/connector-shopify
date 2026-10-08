@@ -828,6 +828,19 @@ class ShopifyProductTemplateSync(models.Model):
                 "state": "synced",
                 "error_message": False,
             }
+            
+            if not variant_binding:
+                variant_binding = self.env["shopify.product.variant"].search(
+                    [
+                        ("instance_id", "=", instance.id),
+                        ("template_binding_id", "=", template_binding.id),
+                        ("odoo_id", "=", variant.id),
+                    ],
+                    limit=1,
+                )
+                if variant_binding:
+                    binding_values["shopify_id"] = payload["id"]
+
             if variant_binding:
                 variant_binding.write(binding_values)
             else:
@@ -838,6 +851,7 @@ class ShopifyProductTemplateSync(models.Model):
                         "shopify_id": payload["id"],
                     }
                 )
+
             if price_owned or (seed_all and len(variants) > 1):
                 self._sync_variant_price(
                     template_binding.instance_id,
