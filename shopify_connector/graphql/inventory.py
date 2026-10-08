@@ -31,7 +31,7 @@ query InventoryLevelForItem($inventoryItemId: ID!, $locationId: ID!) {
   inventoryItem(id: $inventoryItemId) {
     id
     tracked
-    inventoryLevel(locationId: $locationId, includeInactive: true) {
+    inventoryLevel(locationId: $locationId) {
       id
       quantities(names: ["available"]) {
         name
