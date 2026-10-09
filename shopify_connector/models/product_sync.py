@@ -689,10 +689,8 @@ class ShopifyProductTemplateSync(models.Model):
                 for tag in product.get("tags", [])
             }
         )
-        if is_collective:
-            binding.write({
-    "inventory_sync_enabled": False if instance.name == "Emerald Ripple" else not is_collective,
-})
+        if instance.name == "Emerald Ripple":
+            binding.write({"inventory_sync_enabled": False})
 
         self._sync_variants(
             binding,
