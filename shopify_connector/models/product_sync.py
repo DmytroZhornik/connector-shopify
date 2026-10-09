@@ -682,12 +682,29 @@ class ShopifyProductTemplateSync(models.Model):
             binding_values["odoo_status"] = product["status"]
         binding.with_context(shopify_import=True).write(binding_values)
         self._sync_options(template, product["options"], product["variants"])
+        is_collective = (
+            instance.name == "Emerald Ripple"
+            and "shopify collective" in {
+                str(tag).strip().lower()
+                for tag in product.get("tags", [])
+            }
+        )
+        if is_collective:
+            binding.write({
+    "inventory_sync_enabled": not is_collective,
+})
+
         self._sync_variants(
             binding,
             product["variants"],
             seed_all=seed_all,
             prune=complete_snapshot,
         )
+
+        if is_collective:
+            binding.variant_binding_ids.write({
+                "inventory_sync_enabled": False,
+            })
         self._sync_collections(
             binding,
             product["collections"],
