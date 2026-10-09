@@ -691,7 +691,7 @@ class ShopifyProductTemplateSync(models.Model):
         )
         if is_collective:
             binding.write({
-    "inventory_sync_enabled": not is_collective,
+    "inventory_sync_enabled": False if instance.name == "Emerald Ripple" else not is_collective,
 })
 
         self._sync_variants(
@@ -701,10 +701,9 @@ class ShopifyProductTemplateSync(models.Model):
             prune=complete_snapshot,
         )
 
-        if is_collective:
-            binding.variant_binding_ids.write({
-                "inventory_sync_enabled": False,
-            })
+        binding.variant_binding_ids.write({
+            "inventory_sync_enabled": False if instance.name == "Emerald Ripple" else not is_collective,
+        })
         self._sync_collections(
             binding,
             product["collections"],
