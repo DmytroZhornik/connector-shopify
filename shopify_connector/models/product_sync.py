@@ -1138,6 +1138,10 @@ class ShopifyProductTemplateSync(models.Model):
 
     @api.model
     def _enqueue_product_export(self, instance, template):
+        # ITH policy: Shopify owns the product catalogue.
+        # Never enqueue product writes to Shopify.
+        return False
+
         if not instance.active:
             return False
         binding = self.search(
@@ -1155,6 +1159,9 @@ class ShopifyProductTemplateSync(models.Model):
 
     @api.model
     def _job_export_product(self, instance_id, template_id):
+        # ITH policy: never write product catalogue to Shopify.
+        return False
+
         self = self.sudo()
         instance = self.env["shopify.instance"].browse(instance_id).exists()
         if instance:
