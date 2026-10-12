@@ -366,7 +366,17 @@ class ShopifyProductVariantInventorySync(models.Model):
                         expected=expected_sku or "(empty)",
                     )
                 )
-        product = (self.stock_product_id or self.odoo_id).with_company(self.instance_id.company_id).with_context(
+        if not self.stock_product_id:
+            raise UserError(
+                self.env._(
+                    "Inventory export blocked: Shopify variant %s "
+                    "has no canonical stock product.",
+                    self.shopify_id,
+                )
+            )
+        product = self.stock_product_id.with_company(
+            self.instance_id.company_id
+        ).with_context(
             location=location_binding.odoo_location_id.id
         )
         quantity = quantity_for_basis(

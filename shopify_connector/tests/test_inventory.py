@@ -43,6 +43,8 @@ class TestShopifyInventory(TransactionCase):
                 "shopify_id": "gid://shopify/ProductVariant/101",
                 "template_binding_id": cls.template_binding.id,
                 "odoo_id": cls.product.id,
+                "stock_product_id": cls.product.id,
+                "sku_snapshot": "INV-1",
                 "inventory_item_shopify_id": ("gid://shopify/InventoryItem/201"),
                 "inventory_tracked": True,
                 "state": "synced",
@@ -66,6 +68,30 @@ class TestShopifyInventory(TransactionCase):
                 }
             )
         return self.env["shopify.location"].create(values)
+
+    def test_missing_canonical_stock_blocks_inventory(self):
+        location = self._location_binding()
+        self.variant_binding.stock_product_id = False
+
+        self.assertFalse(
+            self.variant_binding._is_storable_inventory_product()
+        )
+
+        from odoo.exceptions import UserError
+        with self.assertRaises(UserError):
+            self.variant_binding._odoo_inventory_quantity(location)
+
+    def test_canonical_stock_inventory_quantity(self):
+        location = self._location_binding()
+
+        self.assertTrue(
+            self.variant_binding._is_storable_inventory_product()
+        )
+
+        quantity = self.variant_binding._odoo_inventory_quantity(
+            location, apply_export_policy=False
+        )
+        self.assertEqual(quantity, 0)
 
     def test_unmapped_location_refuses_inventory_write_and_logs(self):
         location = self._location_binding(mapped=False)
