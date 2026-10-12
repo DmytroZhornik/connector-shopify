@@ -987,14 +987,27 @@ class ShopifyProductTemplateSync(models.Model):
                 )
             )
 
-        if len(candidates) > 1:
+        active_candidates = candidates.filtered("active")
+
+        if len(active_candidates) > 1:
             raise UserError(
                 self.env._(
-                    "Multiple canonical stock products exist for SKU %s. "
+                    "Multiple active canonical stock products exist for SKU %s. "
                     "Resolve the conflict before importing.",
                     sku,
                 )
             )
+
+        if candidates and not active_candidates:
+            raise UserError(
+                self.env._(
+                    "Only archived stock products exist for SKU %s. "
+                    "Review before importing.",
+                    sku,
+                )
+            )
+
+        candidates = active_candidates
 
         if candidates:
             technical_binding = self.env["shopify.product.variant"].sudo().search(

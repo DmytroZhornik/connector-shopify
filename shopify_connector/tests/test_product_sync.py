@@ -121,6 +121,31 @@ class TestShopifyProductSync(TransactionCase):
         )
         delayed._job_import_product_from_api.assert_called_once()
 
+
+    def test_canonical_stock_prefers_active_over_archived(self):
+        sku = "ITH-TEST-ACTIVE-ARCHIVED"
+
+        active = self.env["product.product"].create({
+            "name": "Active Stock Item",
+            "default_code": sku,
+            "is_storable": True,
+        })
+        archived = self.env["product.product"].create({
+            "name": "Archived Stock Item",
+            "default_code": sku,
+            "is_storable": True,
+        })
+        archived.action_archive()
+
+        resolved = self.env[
+            "shopify.product.template"
+        ]._resolve_stock_product_by_sku(
+            self.instance, sku, "Test Product"
+        )
+
+        self.assertEqual(resolved.id, active.id)
+        self.assertFalse(archived.active)
+
     def test_canonical_stock_reuses_same_sku(self):
         resolver = self.env["shopify.product.template"]
         sku = "ITH-TEST-CANONICAL-001"
