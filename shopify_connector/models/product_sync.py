@@ -868,6 +868,55 @@ class ShopifyProductTemplateSync(models.Model):
                     }
                 )
 
+            # Preserve manual stock mappings and report SKU conflicts.
+            if variant_binding.stock_product_id:
+                stock_sku = variant_binding.stock_product_id.default_code
+                shopify_sku = payload.get("sku")
+                if shopify_sku != stock_sku:
+                    instance._write_log(
+                        entity="product",
+                        direction="import",
+                        level="warning",
+                        message=self.env._(
+                            "Stock mapping SKU mismatch: Shopify variant %(variant)s "
+                            "has SKU %(shopify_sku)s, but stock product %(product)s "
+                            "has SKU %(stock_sku)s. Mapping preserved; review required.",
+                            variant=payload["id"],
+                            shopify_sku=shopify_sku or "(empty)",
+                            product=variant_binding.stock_product_id.id,
+                            stock_sku=stock_sku or "(empty)",
+                        ),
+                        record=template_binding,
+                    )
+
+            # Link Shopify variants to an existing shared stock product.
+            # Never overwrite a mapping already configured.
+            if not variant_binding.stock_product_id and payload.get("sku"):
+                stock_candidates = self.env["product.product"].search(
+                    [
+                        ("default_code", "=", payload["sku"]),
+                        ("company_id", "=", False),
+                        ("active", "=", True),
+                    ],
+                    limit=2,
+                )
+                if (
+                    len(stock_candidates) == 1
+                    and stock_candidates.id != variant.id
+                    and not self.env["shopify.product.variant"].search_count(
+                        [("odoo_id", "=", stock_candidates.id)]
+                    )
+                    and not self.env["stock.quant"].search_count(
+                        [("product_id", "=", variant.id)]
+                    )
+                    and not self.env["stock.move"].search_count(
+                        [("product_id", "=", variant.id)]
+                    )
+                ):
+                    variant_binding.write(
+                        {"stock_product_id": stock_candidates.id}
+                    )
+
             if price_owned or (seed_all and len(variants) > 1):
                 self._sync_variant_price(
                     template_binding.instance_id,
