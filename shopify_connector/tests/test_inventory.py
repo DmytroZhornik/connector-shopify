@@ -135,6 +135,30 @@ class TestShopifyInventory(TransactionCase):
         )
         delayed._job_push_inventory_level.assert_called_once_with(location.id)
 
+    def test_technical_product_does_not_enqueue_inventory(self):
+        location = self._location_binding()
+        technical = self.env["product.product"].create({
+            "name": "Shopify Technical Product",
+            "default_code": "INV-TECH-1",
+            "is_storable": False,
+        })
+        self.variant_binding.odoo_id = technical.id
+
+        delayed = Mock()
+        with patch.object(
+            type(self.variant_binding),
+            "with_delay",
+            autospec=True,
+            return_value=delayed,
+        ):
+            self.env["stock.quant"].create({
+                "product_id": technical.id,
+                "location_id": self.warehouse.lot_stock_id.id,
+                "quantity": 2,
+            })
+
+        delayed._job_push_inventory_level.assert_not_called()
+
     def test_matching_recent_webhook_is_ignored_as_echo(self):
         location = self._location_binding()
         self.env["shopify.inventory.state"].create(

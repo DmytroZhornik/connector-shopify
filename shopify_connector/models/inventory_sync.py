@@ -628,11 +628,7 @@ class StockQuantShopifyInventory(models.Model):
                 bindings = variant_model.search(
                     [
                         ("instance_id", "=", location.instance_id.id),
-                        "|",
                         ("stock_product_id", "=", product.id),
-                        "&",
-                        ("stock_product_id", "=", False),
-                        ("odoo_id", "=", product.id),
                         ("state", "=", "synced"),
                         ("inventory_sync_enabled", "=", True),
                         (
