@@ -571,7 +571,11 @@ class ShopifyProductTemplateSync(models.Model):
             ]
             for identifier in identifiers:
                 candidates = product_model.search(
-                    [(field_name, "=", identifier), *company_domain]
+                    [
+                        (field_name, "=", identifier),
+                        ("is_storable", "=", False),
+                        *company_domain,
+                    ]
                 )
                 for candidate in candidates:
                     existing = self.search(
@@ -594,7 +598,8 @@ class ShopifyProductTemplateSync(models.Model):
             "description_sale": product["description"],
             "active": product["status"] != "ARCHIVED",
             "type": "consu",
-            "is_storable": True,
+            # Shopify catalogue records are technical, not physical stock.
+            "is_storable": False,
         }
         if product["variants"]:
             values["list_price"] = self._shopify_amount_to_company(
@@ -868,54 +873,51 @@ class ShopifyProductTemplateSync(models.Model):
                     }
                 )
 
-            # Preserve manual stock mappings and report SKU conflicts.
+            # Never silently accept a changed SKU for a mapped stock item.
             if variant_binding.stock_product_id:
                 stock_sku = variant_binding.stock_product_id.default_code
                 shopify_sku = payload.get("sku")
                 if shopify_sku != stock_sku:
-                    instance._write_log(
-                        entity="product",
-                        direction="import",
-                        level="warning",
-                        message=self.env._(
+                    raise UserError(
+                        self.env._(
                             "Stock mapping SKU mismatch: Shopify variant %(variant)s "
                             "has SKU %(shopify_sku)s, but stock product %(product)s "
-                            "has SKU %(stock_sku)s. Mapping preserved; review required.",
+                            "has SKU %(stock_sku)s. Review before importing.",
                             variant=payload["id"],
                             shopify_sku=shopify_sku or "(empty)",
                             product=variant_binding.stock_product_id.id,
                             stock_sku=stock_sku or "(empty)",
-                        ),
-                        record=template_binding,
+                        )
                     )
 
-            # Link Shopify variants to an existing shared stock product.
-            # Never overwrite a mapping already configured.
+            # Resolve one physical stock product per valid SKU.
+            # Technical Shopify variants must not carry physical inventory.
             if not variant_binding.stock_product_id and payload.get("sku"):
-                stock_candidates = self.env["product.product"].search(
-                    [
-                        ("default_code", "=", payload["sku"]),
-                        ("company_id", "=", False),
-                        ("active", "=", True),
-                    ],
-                    limit=2,
-                )
                 if (
-                    len(stock_candidates) == 1
-                    and stock_candidates.id != variant.id
-                    and not self.env["shopify.product.variant"].search_count(
-                        [("odoo_id", "=", stock_candidates.id)]
-                    )
-                    and not self.env["stock.quant"].search_count(
+                    self.env["stock.quant"].search_count(
                         [("product_id", "=", variant.id)]
                     )
-                    and not self.env["stock.move"].search_count(
+                    or self.env["stock.move"].search_count(
                         [("product_id", "=", variant.id)]
                     )
                 ):
-                    variant_binding.write(
-                        {"stock_product_id": stock_candidates.id}
+                    raise UserError(
+                        self.env._(
+                            "Shopify technical product %s has stock history. "
+                            "Review before assigning canonical stock.",
+                            variant.id,
+                        )
                     )
+
+                stock_product = self._resolve_stock_product_by_sku(
+                    instance,
+                    payload["sku"],
+                    variant.display_name,
+                )
+                if stock_product:
+                    variant_binding.write({
+                        "stock_product_id": stock_product.id,
+                    })
 
             if price_owned or (seed_all and len(variants) > 1):
                 self._sync_variant_price(
@@ -948,6 +950,95 @@ class ShopifyProductTemplateSync(models.Model):
                 skip_shopify_export=True
             ).unlink()
             stale_bindings.unlink()
+
+    @api.model
+    def _resolve_stock_product_by_sku(self, instance, sku, name):
+        """Return the sole canonical stock item for an SKU.
+
+        Serialization by SKU prevents concurrent imports from creating
+        separate stock products. Shopify catalogue variants remain technical.
+        """
+        sku = (sku or "").strip()
+        if not sku:
+            return self.env["product.product"]
+
+        self.env.cr.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+            ("ith.canonical.stock.sku", sku),
+        )
+
+        Product = self.env["product.product"].sudo().with_context(
+            active_test=False
+        )
+        candidates = Product.search([
+            ("default_code", "=", sku),
+            ("is_storable", "=", True),
+        ])
+        allowed_companies = (False, instance.company_id.id)
+        foreign = candidates.filtered(
+            lambda product: product.company_id.id not in allowed_companies
+        )
+        if foreign:
+            raise UserError(
+                self.env._(
+                    "SKU %s belongs to a stock product in another company. "
+                    "Review the company ownership before importing.",
+                    sku,
+                )
+            )
+
+        if len(candidates) > 1:
+            raise UserError(
+                self.env._(
+                    "Multiple canonical stock products exist for SKU %s. "
+                    "Resolve the conflict before importing.",
+                    sku,
+                )
+            )
+
+        if candidates:
+            technical_binding = self.env["shopify.product.variant"].sudo().search(
+                [("odoo_id", "=", candidates.id)],
+                limit=1,
+            )
+            if technical_binding:
+                raise UserError(
+                    self.env._(
+                        "Product %(product)s for SKU %(sku)s is used as a "
+                        "Shopify technical variant. Review before assigning "
+                        "it as canonical stock.",
+                        product=candidates.id,
+                        sku=sku,
+                    )
+                )
+            if not candidates.active:
+                raise UserError(
+                    self.env._(
+                        "Canonical stock product %(product)s for SKU %(sku)s "
+                        "is archived. Review before importing.",
+                        product=candidates.id,
+                        sku=sku,
+                    )
+                )
+            return candidates
+
+        template = self.env["product.template"].sudo().with_context(
+            skip_shopify_export=True
+        ).create({
+            "name": name or sku,
+            "default_code": sku,
+            "company_id": False,
+            "type": "consu",
+            "is_storable": True,
+            "sale_ok": True,
+            "purchase_ok": True,
+        })
+        product = template.product_variant_id
+        if not product:
+            raise UserError(
+                self.env._("Could not create canonical stock product for %s.", sku)
+            )
+        return product
 
     @api.model
     def _sync_variant_price(self, instance, variant_binding, price):
