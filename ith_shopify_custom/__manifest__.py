@@ -4,7 +4,9 @@
     "summary": "Ireland Tackle Hub custom Shopify connector behaviour",
     "license": "AGPL-3",
     "depends": ["shopify_connector"],
-    "data": [],
+    "data": [
+        "views/external_stock_import_views.xml",
+        "security/ir.model.access.csv",],
     "installable": True,
     "application": False,
 }
