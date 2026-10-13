@@ -30,6 +30,7 @@ class ITHExternalStockExport(models.Model):
                         continue
 
                     variant.with_delay(
+                        channel="root.shopify.external",
                         description="ITH External inventory update",
                         identity_key=(
                             f"ith.external.inventory."

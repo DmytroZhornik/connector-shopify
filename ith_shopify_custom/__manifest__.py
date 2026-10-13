@@ -5,6 +5,7 @@
     "license": "AGPL-3",
     "depends": ["shopify_connector"],
     "data": [
+        "data/external_queue.xml",
         "views/external_stock_import_views.xml",
         "security/ir.model.access.csv",],
     "installable": True,
