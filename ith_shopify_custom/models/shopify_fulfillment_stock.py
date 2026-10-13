@@ -464,7 +464,7 @@ class ShopifyExternalAutomaticSync(models.Model):
         if (
             enabled == "True"
             and binding.instance_id.active
-            and not binding.is_draft
+            and not order_data.get("is_draft", False)
             and order_data.get("source") != "pos"
         ):
             binding.with_delay(
