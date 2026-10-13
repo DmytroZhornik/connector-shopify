@@ -251,6 +251,32 @@ class ShopifyOrderExternalStock(models.Model):
                         self.env._("External allocation %s has no SKU.", key)
                     )
 
+                existing = Movement.search([
+                    ("source", "=", "shopify"),
+                    ("source_line_key", "=", key),
+                ], limit=1)
+
+                if self.cancelled_at and existing and existing.order_quantity > 0:
+                    raise UserError(
+                        self.env._(
+                            "Shopify order %s is cancelled. Supplier stock release "
+                            "requires verified fulfillment data before reconciliation.",
+                            self.shopify_id,
+                        )
+                    )
+
+                if existing and target["quantity"] < existing.order_quantity:
+                    raise UserError(
+                        self.env._(
+                            "Shopify External line %s decreased from %s to %s. "
+                            "Cancellation or reassignment must be confirmed "
+                            "before releasing supplier stock.",
+                            key,
+                            existing.order_quantity,
+                            target["quantity"],
+                        )
+                    )
+
                 result = Stock.reconcile_order_quantity(
                     sku,
                     target["quantity"],
