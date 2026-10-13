@@ -323,6 +323,16 @@ class ShopifyExternalSnapshotReconciliation(models.Model):
         )
 
         with self.env.cr.savepoint():
+            if not isinstance(payload, dict) or payload.get("id") != self.shopify_id:
+                raise ValueError(
+                    "Shopify snapshot order ID does not match Odoo order"
+                )
+
+            if payload.get("cancelledAt"):
+                raise ValueError(
+                    "Cancelled Shopify order requires verified supplier stock release"
+                )
+
             quantities = calculate_external_quantities(
                 payload, external_ids, known_ids
             )
