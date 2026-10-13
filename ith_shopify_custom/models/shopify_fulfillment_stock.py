@@ -447,3 +447,32 @@ class ShopifyExternalSnapshotFetch(models.Model):
             raise UserError("Shopify returned no order.")
 
         return self._ith_reconcile_external_snapshot(payload)
+
+
+class ShopifyExternalAutomaticSync(models.Model):
+    _inherit = "shopify.order"
+
+    def _write_success(self, binding, sale_order, order_data, digest):
+        result = super()._write_success(
+            binding, sale_order, order_data, digest
+        )
+
+        enabled = self.env["ir.config_parameter"].sudo().get_param(
+            "ith.external.shopify.auto_sync", "False"
+        )
+
+        if (
+            enabled == "True"
+            and binding.instance_id.active
+            and not binding.is_draft
+            and order_data.get("source") != "pos"
+        ):
+            binding.with_delay(
+                description="ITH External stock synchronization",
+                identity_key=(
+                    f"ith.external.sync."
+                    f"{binding.instance_id.id}.{binding.shopify_id}"
+                ),
+            )._ith_fetch_and_reconcile_external()
+
+        return result
