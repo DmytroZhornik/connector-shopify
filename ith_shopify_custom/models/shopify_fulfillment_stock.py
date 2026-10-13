@@ -416,3 +416,34 @@ class ShopifyExternalSnapshotReconciliation(models.Model):
                 results.append(result)
 
             return results
+
+
+class ShopifyExternalSnapshotFetch(models.Model):
+    _inherit = "shopify.order"
+
+    def _ith_fetch_and_reconcile_external(self):
+        """Fetch and reconcile one Shopify order's External inventory."""
+        self.ensure_one()
+
+        from ..shopify_external_query import (
+            EXTERNAL_ORDER_QUERY,
+        )
+
+        if not self.instance_id.active:
+            raise UserError(
+                "Shopify instance is disabled; external synchronization stopped."
+            )
+
+        if not self.shopify_id:
+            raise UserError("Missing Shopify order ID.")
+
+        response = self.instance_id._shopify_client().execute(
+            EXTERNAL_ORDER_QUERY,
+            {"id": self.shopify_id},
+        )
+
+        payload = response.get("order")
+        if not payload:
+            raise UserError("Shopify returned no order.")
+
+        return self._ith_reconcile_external_snapshot(payload)
