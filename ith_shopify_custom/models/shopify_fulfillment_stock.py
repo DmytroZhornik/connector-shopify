@@ -468,6 +468,7 @@ class ShopifyExternalAutomaticSync(models.Model):
             and order_data.get("source") != "pos"
         ):
             binding.with_delay(
+                channel="root.shopify.export",
                 description="ITH External stock synchronization",
                 identity_key=(
                     f"ith.external.sync."
