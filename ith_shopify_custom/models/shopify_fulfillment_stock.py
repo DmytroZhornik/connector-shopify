@@ -299,3 +299,110 @@ class ShopifyOrderExternalStock(models.Model):
                 results.append(result)
 
             return results
+
+
+class ShopifyExternalSnapshotReconciliation(models.Model):
+    _inherit = "shopify.order"
+
+    def _ith_reconcile_external_snapshot(self, payload):
+        """Reconcile a validated Shopify snapshot; no API calls."""
+        self.ensure_one()
+
+        from ..shopify_external_query import (
+            calculate_external_quantities,
+        )
+
+        Location = self.env["shopify.location"].sudo()
+        locations = Location.search([
+            ("instance_id", "=", self.instance_id.id),
+        ])
+
+        known_ids = set(locations.mapped("shopify_id"))
+        external_ids = set(
+            locations.filtered("use_supplier_stock").mapped("shopify_id")
+        )
+
+        with self.env.cr.savepoint():
+            quantities = calculate_external_quantities(
+                payload, external_ids, known_ids
+            )
+
+            Stock = self.env["ith.external.stock"].sudo()
+            Movement = self.env["ith.external.stock.movement"].sudo()
+            results = []
+
+            previous = Movement.search([
+                ("source", "=", "shopify"),
+                ("reference", "=", self.shopify_id),
+            ])
+
+            expected_keys = {
+                f"{self.instance_id.id}:{line_id}"
+                for line_id in quantities
+            }
+
+            for movement in previous:
+                if (
+                    movement.order_quantity > 0
+                    and movement.source_line_key not in expected_keys
+                ):
+                    raise ValueError(
+                        "Previously accounted Shopify External line disappeared: "
+                        + movement.source_line_key
+                    )
+
+            for shopify_line_id, values in quantities.items():
+                line = self.line_binding_ids.filtered(
+                    lambda item, sid=shopify_line_id: item.shopify_id == sid
+                )[:1]
+
+                sku = line.odoo_id.product_id.default_code
+                if not sku:
+                    raise ValueError(
+                        f"Missing canonical SKU for {shopify_line_id}"
+                    )
+
+                key = f"{self.instance_id.id}:{shopify_line_id}"
+
+                existing = Movement.search([
+                    ("source", "=", "shopify"),
+                    ("source_line_key", "=", key),
+                ], limit=1)
+
+                if existing:
+                    if values["total"] < existing.order_quantity:
+                        raise ValueError(
+                            "Unconfirmed Shopify External stock release: " + key
+                        )
+                    if values["fulfilled"] < existing.fulfilled_quantity:
+                        raise ValueError(
+                            "Previously shipped quantity decreased: " + key
+                        )
+                    if existing.sku != sku:
+                        raise ValueError(
+                            "Canonical SKU changed for Shopify line: " + key
+                        )
+
+                result = Stock.reconcile_order_quantity(
+                    sku,
+                    values["total"],
+                    "shopify",
+                    self.shopify_id,
+                    key,
+                )
+
+                movement = self.env[
+                    "ith.external.stock.movement"
+                ].sudo().search([
+                    ("source", "=", "shopify"),
+                    ("source_line_key", "=", key),
+                ], limit=1)
+
+                movement.write({
+                    "reserved_quantity": values["reserved"],
+                    "fulfilled_quantity": values["fulfilled"],
+                })
+
+                results.append(result)
+
+            return results
