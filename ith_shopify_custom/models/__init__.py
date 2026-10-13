@@ -6,3 +6,4 @@ from . import external_stock_location
 from . import external_stock_inventory
 from . import external_stock_movement
 from . import shopify_fulfillment_stock
+from . import external_stock_export
