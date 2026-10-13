@@ -15,7 +15,7 @@ class ITHExternalStockImport(models.TransientModel):
     )
     filename = fields.Char(string="Filename")
     complete_snapshot = fields.Boolean(
-        string="This file contains the complete supplier stock list",
+        string="Zero missing SKUs (full snapshot)",
         required=True,
     )
 
@@ -27,14 +27,6 @@ class ITHExternalStockImport(models.TransientModel):
                 self.env._("Only inventory managers can import supplier stock.")
             )
 
-        if not self.complete_snapshot:
-            raise UserError(
-                self.env._(
-                    "Confirm that this is a complete supplier stock list. "
-                    "Missing SKUs will be set to zero in external stock."
-                )
-            )
-
         if not (self.filename or "").lower().endswith(".xlsx"):
             raise UserError(self.env._("Please select an .xlsx Excel file."))
 
@@ -44,7 +36,7 @@ class ITHExternalStockImport(models.TransientModel):
             raise UserError(self.env._("Invalid Excel file data."))
 
         result = self.env["ith.external.stock"].sudo().import_supplier_xlsx(
-            content
+            content, zero_missing=self.complete_snapshot
         )
 
         return {

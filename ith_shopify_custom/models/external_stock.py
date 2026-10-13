@@ -49,7 +49,7 @@ class ITHExternalStock(models.Model):
                 )
 
     @api.model
-    def replace_supplier_snapshot(self, rows):
+    def replace_supplier_snapshot(self, rows, *, zero_missing=True):
         """Replace the complete external supplier stock snapshot.
 
         rows: iterable of {"sku": str, "quantity": number}.
@@ -113,7 +113,7 @@ class ITHExternalStock(models.Model):
                     })
 
             for sku, record in existing.items():
-                if sku not in incoming and record.quantity:
+                if zero_missing and sku not in incoming and record.quantity:
                     record.write({"quantity": 0})
                     zeroed += 1
 
@@ -123,7 +123,7 @@ class ITHExternalStock(models.Model):
         }
 
     @api.model
-    def import_supplier_xlsx(self, content):
+    def import_supplier_xlsx(self, content, *, zero_missing=False):
         """Import a complete supplier availability Excel snapshot."""
         from io import BytesIO
         import re
@@ -190,7 +190,7 @@ class ITHExternalStock(models.Model):
 
                 incoming.append({"sku": sku, "quantity": quantity})
 
-            if len(incoming) < 1000:
+            if zero_missing and len(incoming) < 1000:
                 raise ValidationError(
                     self.env._(
                         "Full supplier snapshot has fewer than 1000 rows. "
@@ -198,7 +198,7 @@ class ITHExternalStock(models.Model):
                     )
                 )
 
-            return self.replace_supplier_snapshot(incoming)
+            return self.replace_supplier_snapshot(incoming, zero_missing=zero_missing)
         finally:
             workbook.close()
 
