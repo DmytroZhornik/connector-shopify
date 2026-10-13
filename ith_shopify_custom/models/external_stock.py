@@ -14,6 +14,12 @@ class ITHExternalStock(models.Model):
         required=True,
         default=0.0,
     )
+    snapshot_version = fields.Integer(
+        string="Stock Snapshot Version",
+        default=0,
+        readonly=True,
+    )
+
     updated_at = fields.Datetime(
         string="Last Updated",
         default=fields.Datetime.now,
@@ -101,26 +107,126 @@ class ITHExternalStock(models.Model):
 
             existing = {r.sku: r for r in self.sudo().search([])}
             zeroed = 0
+            next_version = max((r.snapshot_version for r in existing.values()), default=0) + 1
 
             for sku, quantity in incoming.items():
                 if sku in existing:
-                    if existing[sku].quantity != quantity:
-                        existing[sku].write({"quantity": quantity})
+                    existing[sku].write({
+                        "quantity": quantity,
+                        "snapshot_version": next_version,
+                    })
                 else:
                     self.sudo().create({
                         "sku": sku,
                         "quantity": quantity,
+                        "snapshot_version": next_version,
                     })
 
-            for sku, record in existing.items():
-                if zero_missing and sku not in incoming and record.quantity:
-                    record.write({"quantity": 0})
-                    zeroed += 1
+            if zero_missing:
+                for sku, record in existing.items():
+                    if sku not in incoming:
+                        if record.quantity:
+                            zeroed += 1
+                        record.write({
+                            "quantity": 0,
+                            "snapshot_version": next_version,
+                        })
 
         return {
             "imported": len(incoming),
             "zeroed": zeroed,
         }
+
+
+    @api.model
+    @api.model
+    def reconcile_order_quantity(self, sku, quantity, source, reference, source_line_key):
+        """Reconcile order availability once, without replay after an Excel reset."""
+        from odoo.exceptions import UserError
+
+        sku = (sku or "").strip()
+        if source not in ("shopify", "amazon", "odoo"):
+            raise UserError(self.env._("Unsupported order source."))
+        if not sku or not reference or not source_line_key:
+            raise UserError(self.env._("Missing order reference."))
+
+        try:
+            quantity = float(quantity)
+        except (TypeError, ValueError):
+            raise UserError(self.env._("Invalid order quantity."))
+        if not 0 <= quantity < float("inf") or not quantity.is_integer():
+            raise UserError(self.env._("Order quantity must be a nonnegative integer."))
+
+        with self.env.cr.savepoint():
+            self.env.cr.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                ("ith.external.stock.snapshot",),
+            )
+            stock = self.sudo().search([("sku", "=", sku)], limit=1)
+            if not stock:
+                raise UserError(self.env._("External SKU %s not found.", sku))
+
+            Movement = self.env["ith.external.stock.movement"].sudo()
+            movement = Movement.search([
+                ("source", "=", source),
+                ("source_line_key", "=", source_line_key),
+            ], limit=1)
+
+            if movement and movement.stock_id.id != stock.id:
+                raise UserError(self.env._("Order line SKU changed; manual review required."))
+
+            if movement and movement.snapshot_version != stock.snapshot_version:
+                # Excel supersedes all availability effects of this old line.
+                # Keep the old snapshot version to prevent future replay.
+                movement.write({
+                    "order_quantity": quantity,
+                    "shortage_quantity": 0.0,
+                    "quantity_delta": 0.0,
+                })
+                return {
+                    "applied_delta": 0.0,
+                    "quantity": stock.quantity,
+                    "shortage": 0.0,
+                }
+
+            previous = movement.order_quantity if movement else 0.0
+            previous_shortage = movement.shortage_quantity if movement else 0.0
+            previously_deducted = max(0.0, previous - previous_shortage)
+
+            # Return only the previously deducted quantity, not the shortfall.
+            available = stock.quantity + previously_deducted
+            deducted = min(quantity, available)
+            shortage = quantity - deducted
+            new_stock = max(0.0, available - deducted)
+
+            values = {
+                "order_quantity": quantity,
+                "shortage_quantity": shortage,
+                "quantity_delta": -deducted,
+            }
+
+            if movement:
+                movement.write(values)
+            else:
+                values.update({
+                    "stock_id": stock.id,
+                    "source": source,
+                    "reference": reference,
+                    "source_line_key": source_line_key,
+                    "snapshot_version": stock.snapshot_version,
+                    "last_applied_snapshot_version": stock.snapshot_version,
+                    "applied": True,
+                })
+                Movement.create(values)
+
+            if new_stock != stock.quantity:
+                stock.write({"quantity": new_stock})
+
+            return {
+                "applied_delta": deducted - previously_deducted,
+                "quantity": new_stock,
+                "shortage": shortage,
+            }
 
     @api.model
     def import_supplier_xlsx(self, content, *, zero_missing=False):
