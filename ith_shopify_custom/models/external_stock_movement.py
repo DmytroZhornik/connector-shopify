@@ -18,6 +18,16 @@ class ITHExternalStockMovement(models.Model):
         readonly=True,
     )
     quantity_delta = fields.Float(required=True)
+    fulfilled_quantity = fields.Float(
+        string="Fulfilled Quantity",
+        default=0.0,
+        help="Quantity already shipped and not releasable by allocation changes.",
+    )
+    reserved_quantity = fields.Float(
+        string="Reserved Quantity",
+        default=0.0,
+        help="Outstanding quantity allocated to external supplier stock.",
+    )
     shortage_quantity = fields.Float(
         string="Unfulfilled Supplier Availability",
         default=0.0,
