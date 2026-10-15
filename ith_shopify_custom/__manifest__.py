@@ -1,6 +1,6 @@
 {
     "name": "ITH Shopify Custom",
-    "version": "19.0.1.1.1",
+    "version": "19.0.1.2.0",
     "summary": "Ireland Tackle Hub custom Shopify connector behaviour",
     "license": "AGPL-3",
     "depends": ["shopify_connector", "queue_job_cron_jobrunner"],
@@ -11,6 +11,7 @@
         "security/ir.model.access.csv",
         "data/order_mapping.xml",
         "views/order_mapping_views.xml",
+        "data/stock_dispatch.xml",
     ],
     "installable": True,
     "application": False,
