@@ -6,7 +6,7 @@ from odoo.exceptions import UserError
 from odoo.addons.shopify_connector.graphql.inventory import INVENTORY_SET_QUANTITIES_MUTATION
 from odoo.addons.shopify_connector.lib.inventory import build_inventory_set_payload
 
-from .joint_policy import WriteCapability, ReadBudget, quantity
+from .joint_policy import WriteCapability, ReadBudget, quantity, observe_only
 from .stock_dispatch_policy import live_level
 from .stock_dispatch import LIVE_QUERY
 from .joint_dispatch import GuardedClient
@@ -74,6 +74,8 @@ class ITHJointInventory(models.Model):
         desired = bound._ith_joint_desired(snapshot, location_id, revision['id'])
         location = bound.env['shopify.location'].sudo().browse(location_id)
         changed = desired != remote
+        if observe_only(scope) and changed:
+            raise UserError('ACTIVE observation quantity differs; stop with ZERO mutations, never seed or overwrite.')
         if changed:
             capability = WriteCapability(bound.env.context.get('job_uuid'), snapshot, bound.id,
                                          location_id, revision['id'], desired, remote)
@@ -105,6 +107,8 @@ class ITHJointInventory(models.Model):
             raise UserError('Inventory writes require the admitted joint native job.')
         queue = self.env['queue.job']
         scope, revision = queue._ith_joint_stock_barrier(snapshot, self.id, location_binding.id)
+        if observe_only(scope):
+            raise UserError('ACTIVE observation does not permit any Shopify quantity mutation.')
         capability = self.env.context.get('ith_joint_write_capability')
         if not isinstance(capability, WriteCapability) or not isinstance(client, GuardedClient):
             raise UserError('No one-shot native inventory capability/transport.')
