@@ -152,6 +152,12 @@ class ITHOwnStockVariantGuard(models.Model):
         return super(ITHOwnStockVariantGuard, self.with_context(ith_own_stock_scope_snapshot=snapshot))._job_push_inventory_level(location_binding_id)
 
     def _execute_inventory_set(self, client, location_binding, desired, compare_quantity):
+        operational_snapshot = self.env.context.get("ith_stock_policy_snapshot")
+        if operational_snapshot is not None:
+            self.env["queue.job"]._ith_stock_guard_entry(
+                self, location_binding.id, snapshot=operational_snapshot,
+            )
+            return super()._execute_inventory_set(client, location_binding, desired, compare_quantity)
         if "staging" in self.env.cr.dbname.lower() and not location_binding.use_supplier_stock:
             snapshot = self.env.context.get("ith_own_stock_scope_snapshot")
             if not snapshot:

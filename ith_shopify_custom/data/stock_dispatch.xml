@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="queue_channel_ith_stock" model="queue.job.channel">
+        <field name="name">ith_stock</field>
+        <field name="parent_id" ref="shopify_connector.queue_channel_shopify"/>
+        <field name="removal_interval">30</field>
+    </record>
+    <record id="job_ith_stock_inventory" model="queue.job.function">
+        <field name="name">&lt;shopify.product.variant&gt;._ith_job_push_stock</field>
+        <field name="channel_id" ref="queue_channel_ith_stock"/>
+    </record>
+    <data noupdate="1">
+        <record id="cron_ith_stock_policy" model="ir.cron">
+            <field name="name">ITH — admitted stock-only native queue</field>
+            <field name="model_id" ref="queue_job.model_queue_job"/>
+            <field name="state">code</field>
+            <field name="code">model._ith_stock_tick()</field>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="queue_job_runner" eval="True"/>
+            <field name="active" eval="False"/>
+        </record>
+    </data>
+</odoo>
