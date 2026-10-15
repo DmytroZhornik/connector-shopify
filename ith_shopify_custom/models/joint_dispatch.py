@@ -14,6 +14,7 @@ from .joint_policy import (
     ENABLE_KEY, SCOPE_KEY, CLOSED_KEYS, JOINT_LOCK, SUPPLIER_LOCK, KIND,
     ORDER_CHANNEL, STOCK_CHANNEL, ORDER_METHOD, STOCK_METHOD, ReadBudget,
     joint_scope, encode, digest, identity, job_matches, revision_ready, quantity,
+    observe_only, observe_canonical_chain, MIRROR_USAGE_KEYS, scoped_item,
 )
 from ..shopify_external_query import (
     EXTERNAL_ORDER_QUERY, _issue_fresh_external_order_read_proof,
@@ -59,6 +60,8 @@ class GuardedClient:
 
     def inventory_once(self, query, variables, capability):
         snapshot = self.queue._ith_joint_guard('stock')
+        if observe_only(self.queue._ith_joint_assert(snapshot)):
+            raise UserError('ACTIVE observation never changes Shopify quantities.')
         if (snapshot != self.snapshot or query != INVENTORY_SET_QUANTITIES_MUTATION
                 or not capability.used or capability.snapshot != snapshot
                 or capability.uuid != self.queue.env.context.get('job_uuid') or self.inventory_sent):
@@ -230,6 +233,64 @@ class ITHJointQueue(models.Model):
     @api.model
     def _ith_stock_requested(self):
         return self._ith_joint_requested() or super()._ith_stock_requested()
+
+    @api.model
+    def _ith_stock_validate_binding(self, scope, variant, location_id):
+        if self.env.context.get('ith_joint_snapshot') is None and not self._ith_joint_requested():
+            return super()._ith_stock_validate_binding(scope, variant, location_id)
+        current = self._ith_joint_scope()
+        if not current or encode(scope) != encode(current['stock']):
+            raise UserError('Joint subject policy is closed or changed.')
+        if not observe_only(current):
+            return super()._ith_stock_validate_binding(scope, variant, location_id)
+        # The exception is ONLY for observation: original DRAFT/write rules stay intact.
+        item = scoped_item(scope, variant.id, location_id)
+        if not item or len(variant) != 1:
+            raise UserError('ACTIVE observation has no exact item/location.')
+        with self.env.registry.cursor() as cr:
+            cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY')
+            env = api.Environment(cr, self.env.uid, dict(self.env.context))
+            fresh = env['shopify.product.variant'].sudo().browse(variant.id).exists()
+            if not (fresh and fresh.instance_id.id == 1
+                    and fresh.stock_product_id.id == item['stock_product_id']
+                    and fresh.stock_product_id.default_code == item['sku'] == fresh.sku_snapshot
+                    and fresh.shopify_id == item['variant_gid']
+                    and fresh.inventory_item_shopify_id == item['inventory_item_gid']
+                    and fresh._inventory_sync_eligible()):
+                raise UserError('ACTIVE observation binding identity is invalid.')
+            products = env['product.product'].sudo().with_context(active_test=False).search([
+                ('default_code', '=', item['sku'])], limit=3)
+            bindings = env['shopify.product.variant'].sudo().with_context(active_test=False).search([
+                ('instance_id', '=', 1), '|', ('sku_snapshot', '=', item['sku']),
+                ('inventory_item_shopify_id', '=', item['inventory_item_gid'])], limit=2)
+            def product_data(product):
+                return {'id': product.id, 'sku': product.default_code or '',
+                        'active': product.active, 'is_storable': product.is_storable,
+                        'company_id': product.company_id.id or None,
+                        'template_id': product.product_tmpl_id.id}
+            if not fresh.odoo_id:
+                raise UserError('ACTIVE observation has no catalogue mirror.')
+            mirror = product_data(fresh.odoo_id)
+            usage = {}
+            if fresh.odoo_id != fresh.stock_product_id:
+                # Constant table allowlist; any stock/commercial history rejects the mirror.
+                for table in MIRROR_USAGE_KEYS:
+                    cr.execute('SELECT EXISTS(SELECT 1 FROM ' + table + ' WHERE product_id=%s)', (fresh.odoo_id.id,))
+                    usage[table] = int(cr.fetchone()[0])
+            rows = [{'id': b.id, 'instance_id': b.instance_id.id, 'sku': b.sku_snapshot,
+                     'stock_product_id': b.stock_product_id.id, 'mirror_product_id': b.odoo_id.id,
+                     'template_id': b.template_binding_id.odoo_id.id,
+                     'variant_gid': b.shopify_id, 'inventory_item_gid': b.inventory_item_shopify_id}
+                    for b in bindings]
+            if not observe_canonical_chain(item, [product_data(p) for p in products], rows,
+                                           mirror, usage, current['company_id']):
+                raise UserError('Only one physical canonical SKU plus its unused technical mirror is permitted.')
+        loc = next(loc for loc in scope['locations'] if loc['id'] == location_id)
+        if loc['supplier'] or location_id != 1:
+            raise UserError('First ACTIVE observation is Own-location only.')
+        if encode(scope) != encode((self._ith_joint_scope() or {}).get('stock')):
+            raise UserError('ACTIVE observation policy changed during validation.')
+        return item, loc
 
     @api.model
     def _ith_guard_order_job_entry(self):
