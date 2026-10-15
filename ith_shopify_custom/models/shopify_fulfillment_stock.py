@@ -457,6 +457,9 @@ class ShopifyExternalAutomaticSync(models.Model):
             binding, sale_order, order_data, digest
         )
 
+        if getattr(sale_order, "ith_shopify_mapping_pending", False):
+            return result
+
         enabled = self.env["ir.config_parameter"].sudo().get_param(
             "ith.external.shopify.auto_sync", "False"
         )
