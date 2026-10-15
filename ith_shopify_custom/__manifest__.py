@@ -1,6 +1,6 @@
 {
     "name": "ITH Shopify Custom",
-    "version": "19.0.1.3.0",
+    "version": "19.0.1.3.1",
     "summary": "Ireland Tackle Hub custom Shopify connector behaviour",
     "license": "AGPL-3",
     "depends": ["shopify_connector", "queue_job_cron_jobrunner", "sale_stock"],
