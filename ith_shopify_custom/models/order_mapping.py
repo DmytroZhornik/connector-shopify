@@ -57,9 +57,11 @@ class ITHOrderMapping(models.Model):
         self.odoo_id._ith_check_mapping()
         return super()._ith_reconcile_external_stock()
 
-    def _ith_reconcile_external_snapshot(self, payload):
+    def _ith_reconcile_external_snapshot(self, payload, *, _release_proof=None):
         self.odoo_id._ith_check_mapping()
-        return super()._ith_reconcile_external_snapshot(payload)
+        return super()._ith_reconcile_external_snapshot(
+            payload, _release_proof=_release_proof
+        )
 
     def _ith_fetch_and_reconcile_external(self):
         self.odoo_id._ith_check_mapping()

@@ -304,12 +304,12 @@ class ShopifyOrderExternalStock(models.Model):
 class ShopifyExternalSnapshotReconciliation(models.Model):
     _inherit = "shopify.order"
 
-    def _ith_reconcile_external_snapshot(self, payload):
-        """Reconcile a validated Shopify snapshot; no API calls."""
+    def _ith_reconcile_external_snapshot(self, payload, *, _release_proof=None):
+        """Reconcile a snapshot; releases require a fresh-read capability."""
         self.ensure_one()
 
         from ..shopify_external_query import (
-            calculate_external_quantities,
+            plan_external_snapshot_reconciliation,
         )
 
         Location = self.env["shopify.location"].sudo()
@@ -328,70 +328,71 @@ class ShopifyExternalSnapshotReconciliation(models.Model):
                     "Shopify snapshot order ID does not match Odoo order"
                 )
 
-            if payload.get("cancelledAt"):
-                raise ValueError(
-                    "Cancelled Shopify order requires verified supplier stock release"
-                )
-
-            quantities = calculate_external_quantities(
-                payload, external_ids, known_ids
-            )
-
             Stock = self.env["ith.external.stock"].sudo()
             Movement = self.env["ith.external.stock.movement"].sudo()
             results = []
+
+            # Share the already-established Excel/ledger serialization lock.
+            # Read the latest movement state after locking, not from an old
+            # pre-API ORM cache. The engine takes the same reentrant lock.
+            self.env.cr.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                ("ith.external.stock.snapshot",),
+            )
+            Movement.invalidate_model([
+                "order_quantity", "fulfilled_quantity", "write_date",
+                "snapshot_version",
+            ])
+            Stock.invalidate_model(["quantity", "snapshot_version"])
 
             previous = Movement.search([
                 ("source", "=", "shopify"),
                 ("reference", "=", self.shopify_id),
             ])
 
-            expected_keys = {
-                f"{self.instance_id.id}:{line_id}"
-                for line_id in quantities
+            targets = plan_external_snapshot_reconciliation(
+                payload,
+                external_ids,
+                known_ids,
+                [
+                    {
+                        "source_line_key": movement.source_line_key,
+                        "order_quantity": movement.order_quantity,
+                        "fulfilled_quantity": movement.fulfilled_quantity,
+                        "write_date": movement.write_date,
+                    }
+                    for movement in previous
+                ],
+                instance_id=self.instance_id.id,
+                shopify_id=self.shopify_id,
+                release_proof=_release_proof,
+            )
+            previous_by_key = {
+                movement.source_line_key: movement for movement in previous
             }
 
-            for movement in previous:
-                if (
-                    movement.order_quantity > 0
-                    and movement.source_line_key not in expected_keys
-                ):
-                    raise ValueError(
-                        "Previously accounted Shopify External line disappeared: "
-                        + movement.source_line_key
-                    )
-
-            for shopify_line_id, values in quantities.items():
+            for key, values in targets.items():
+                shopify_line_id = values["shopify_line_id"]
                 line = self.line_binding_ids.filtered(
                     lambda item, sid=shopify_line_id: item.shopify_id == sid
                 )[:1]
 
-                sku = line.odoo_id.product_id.default_code
+                existing = previous_by_key.get(key)
+                sku = False
+                if line and line.odoo_id and line.odoo_id.product_id:
+                    sku = line.odoo_id.product_id.default_code
+
+                if existing:
+                    if sku and existing.sku != sku:
+                        raise ValueError(
+                            "Canonical SKU changed for Shopify line: " + key
+                        )
+                    sku = sku or existing.sku
+
                 if not sku:
                     raise ValueError(
                         f"Missing canonical SKU for {shopify_line_id}"
                     )
-
-                key = f"{self.instance_id.id}:{shopify_line_id}"
-
-                existing = Movement.search([
-                    ("source", "=", "shopify"),
-                    ("source_line_key", "=", key),
-                ], limit=1)
-
-                if existing:
-                    if values["total"] < existing.order_quantity:
-                        raise ValueError(
-                            "Unconfirmed Shopify External stock release: " + key
-                        )
-                    if values["fulfilled"] < existing.fulfilled_quantity:
-                        raise ValueError(
-                            "Previously shipped quantity decreased: " + key
-                        )
-                    if existing.sku != sku:
-                        raise ValueError(
-                            "Canonical SKU changed for Shopify line: " + key
-                        )
 
                 result = Stock.reconcile_order_quantity(
                     sku,
@@ -401,12 +402,14 @@ class ShopifyExternalSnapshotReconciliation(models.Model):
                     key,
                 )
 
-                movement = self.env[
-                    "ith.external.stock.movement"
-                ].sudo().search([
+                movement = Movement.search([
                     ("source", "=", "shopify"),
                     ("source_line_key", "=", key),
                 ], limit=1)
+                if not movement:
+                    raise ValueError(
+                        "Shopify External movement was not created: " + key
+                    )
 
                 movement.write({
                     "reserved_quantity": values["reserved"],
@@ -427,7 +430,9 @@ class ShopifyExternalSnapshotFetch(models.Model):
 
         from ..shopify_external_query import (
             EXTERNAL_ORDER_QUERY,
+            _issue_fresh_external_order_read_proof,
         )
+        from datetime import datetime
 
         if not self.instance_id.active:
             raise UserError(
@@ -437,16 +442,32 @@ class ShopifyExternalSnapshotFetch(models.Model):
         if not self.shopify_id:
             raise UserError("Missing Shopify order ID.")
 
+        read_started_at = datetime.utcnow()
         response = self.instance_id._shopify_client().execute(
             EXTERNAL_ORDER_QUERY,
             {"id": self.shopify_id},
         )
 
+        if not isinstance(response, dict) or response.get("errors"):
+            raise UserError("Shopify External order read failed.")
+
         payload = response.get("order")
         if not payload:
             raise UserError("Shopify returned no order.")
 
-        return self._ith_reconcile_external_snapshot(payload)
+        try:
+            proof = _issue_fresh_external_order_read_proof(
+                self.instance_id.id, self.shopify_id, payload,
+                read_started_at=read_started_at,
+            )
+        except ValueError as error:
+            raise UserError(
+                "Shopify returned an incomplete External order snapshot."
+            ) from error
+
+        return self._ith_reconcile_external_snapshot(
+            payload, _release_proof=proof
+        )
 
 
 class ShopifyExternalAutomaticSync(models.Model):
