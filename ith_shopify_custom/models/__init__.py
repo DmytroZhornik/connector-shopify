@@ -11,3 +11,4 @@ from . import external_queue_runner
 from . import order_queue
 from . import order_mapping
 from . import order_reconcile
+from . import own_stock_queue
